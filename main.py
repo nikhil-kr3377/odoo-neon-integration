@@ -2,11 +2,13 @@
 import os
 import re
 import hmac
+import logging
 
 import psycopg
 from fastapi import FastAPI, Request, HTTPException
 
 app = FastAPI()
+logging.basicConfig(level=logging.INFO)
 
 WEBHOOK_SECRET = os.environ["WEBHOOK_SECRET"]
 
@@ -33,7 +35,10 @@ async def receive_product(request: Request, secret: str):
     if not hmac.compare_digest(secret, WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    data = await request.json()
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
     odoo_id = data.get("id")
     name = data.get("name")
@@ -48,7 +53,6 @@ async def receive_product(request: Request, secret: str):
             detail="Product ID, name and internal reference are required"
         )
 
-    # Our existing product reference convention is M1-CODE, M2-CODE, etc.
     match = re.match(r"^M(\d+)-(.+)$", str(default_code))
 
     if not match:
@@ -59,43 +63,74 @@ async def receive_product(request: Request, secret: str):
 
     manufacturer_id = int(match.group(1))
     product_code = match.group(2)
-
     status = "ACTIVE" if active else "INACTIVE"
 
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
 
+                # Confirm that the manufacturer exists
                 cur.execute("""
-                    INSERT INTO marketplace.products
-                    (
-                        manufacturer_id,
-                        odoo_product_id,
-                        product_name,
-                        product_code,
-                        description,
-                        price,
-                        status
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    SELECT 1
+                    FROM marketplace.manufacturers
+                    WHERE manufacturer_id = %s
+                """, (manufacturer_id,))
 
-                    ON CONFLICT (odoo_product_id)
-                    DO UPDATE SET
-                        manufacturer_id = EXCLUDED.manufacturer_id,
-                        product_name = EXCLUDED.product_name,
-                        product_code = EXCLUDED.product_code,
-                        description = EXCLUDED.description,
-                        price = EXCLUDED.price,
-                        status = EXCLUDED.status
+                if cur.fetchone() is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Manufacturer does not exist in Neon"
+                    )
+
+                # First: update using the Odoo product ID
+                cur.execute("""
+                    UPDATE marketplace.products
+                    SET manufacturer_id = %s,
+                        product_name = %s,
+                        product_code = %s,
+                        description = %s,
+                        price = %s,
+                        status = %s
+                    WHERE odoo_product_id = %s
                 """, (
-                    manufacturer_id,
-                    odoo_id,
-                    name,
-                    product_code,
-                    description,
-                    price,
-                    status
+                    manufacturer_id, name, product_code,
+                    description, price, status, odoo_id
                 ))
+
+                # Second: if not found, match an existing Neon product
+                if cur.rowcount == 0:
+                    cur.execute("""
+                        UPDATE marketplace.products
+                        SET odoo_product_id = %s,
+                            product_name = %s,
+                            description = %s,
+                            price = %s,
+                            status = %s
+                        WHERE manufacturer_id = %s
+                          AND product_code = %s
+                    """, (
+                        odoo_id, name, description, price, status,
+                        manufacturer_id, product_code
+                    ))
+
+                # Third: insert if no existing product was found
+                if cur.rowcount == 0:
+                    cur.execute("""
+                        INSERT INTO marketplace.products
+                        (
+                            manufacturer_id,
+                            odoo_product_id,
+                            product_name,
+                            product_code,
+                            description,
+                            price,
+                            status
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        manufacturer_id, odoo_id, name,
+                        product_code, description, price, status
+                    ))
 
         return {
             "success": True,
@@ -104,5 +139,11 @@ async def receive_product(request: Request, secret: str):
             "message": "Product synchronized to Neon"
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logging.exception("Product synchronization failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Product synchronization failed. Check server logs."
+        )
