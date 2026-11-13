@@ -27,7 +27,26 @@ def get_db_connection():
 @app.get("/")
 def home():
     return {"status": "Odoo to Neon integration is running"}
+@app.get("/db-check")
+def db_check():
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT current_database(), current_user")
+                result = cur.fetchone()
 
+        return {
+            "database_status": "Connected",
+            "database": result[0],
+            "user": result[1]
+        }
+
+    except Exception:
+        logging.exception("Database connection test failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Database connection failed. Check Render logs."
+        )
 
 @app.post("/webhook/{secret}")
 async def receive_product(request: Request, secret: str):
