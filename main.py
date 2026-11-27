@@ -156,8 +156,6 @@ def db_check():
         )
 
 @app.post("/webhook/{secret}")
-status = "ACTIVE" if active else "INACTIVE"
-attributes = fetch_odoo_attributes(odoo_id)
 async def receive_product(request: Request, secret: str):
 
     if not hmac.compare_digest(secret, WEBHOOK_SECRET):
@@ -192,6 +190,7 @@ async def receive_product(request: Request, secret: str):
     manufacturer_id = int(match.group(1))
     product_code = match.group(2)
     status = "ACTIVE" if active else "INACTIVE"
+    attributes = fetch_odoo_attributes(odoo_id)
 
     try:
         with get_db_connection() as conn:
@@ -259,6 +258,56 @@ async def receive_product(request: Request, secret: str):
                         manufacturer_id, odoo_id, name,
                         product_code, description, price, status
                     ))
+
+                # Get the Neon product ID
+                cur.execute(
+                    """
+                    SELECT product_id
+                    FROM marketplace.products
+                    WHERE odoo_product_id = %s
+                    """,
+                    (odoo_id,)
+                )
+
+                product_row = cur.fetchone()
+
+                if not product_row:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Product was not found in Neon"
+                    )
+
+                neon_product_id = product_row[0]
+
+                # Delete old attribute configurations
+                cur.execute(
+                    """
+                    DELETE FROM marketplace.product_configurations
+                    WHERE product_id = %s
+                    """,
+                    (neon_product_id,)
+                )
+
+                # Insert latest attribute configurations
+                for attribute in attributes:
+                    cur.execute(
+                        """
+                        INSERT INTO marketplace.product_configurations
+                        (
+                            product_id,
+                            attribute_id,
+                            attribute_name,
+                            attribute_value
+                        )
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (
+                            neon_product_id,
+                            attribute["attribute_id"],
+                            attribute["attribute_name"],
+                            attribute["attribute_value"]
+                        )
+                    )
 
         return {
             "success": True,
