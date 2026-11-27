@@ -183,7 +183,7 @@ def test_odoo():
             detail="Odoo environment variables are missing"
         )
 
-    url = f"{odoo_url}/json/2/product.template/read"
+    url = f"{odoo_url}/json/2/product.template/search_read"
 
     headers = {
         "Authorization": f"bearer {api_key}",
@@ -191,18 +191,17 @@ def test_odoo():
         "User-Agent": "odoo-neon-integration"
     }
 
-    payload = {
-        "ids": [1],
-        "fields": [
-            "id",
-            "name",
-            "default_code",
-            "list_price",
-            "description_sale",
-            "active",
-            "write_date"
-        ]
-    }
+ payload = {
+    "domain": [],
+    "limit": 5,
+    "fields": [
+        "id",
+        "name",
+        "default_code",
+        "list_price",
+        "active"
+    ]
+}
 
     try:
         response = requests.post(
