@@ -192,7 +192,7 @@ def test_odoo():
     }
 
     payload = {
-        "ids": [28],
+        "ids": [1],
         "fields": [
             "id",
             "name",
