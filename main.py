@@ -228,3 +228,140 @@ def test_odoo():
             status_code=502,
             detail=str(error)
         )
+
+@app.get("/test-odoo-attributes")
+def test_odoo_attributes(product_id: int = 1):
+    odoo_url = os.getenv("ODOO_URL", "").rstrip("/")
+    api_key = os.getenv("ODOO_API_KEY")
+
+    headers = {
+        "Authorization": f"bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    def odoo_call(model, method, payload):
+        url = f"{odoo_url}/json/2/{model}/{method}"
+
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+
+        if not response.ok:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Odoo {model} error: {response.text[:1000]}"
+            )
+
+        return response.json()
+
+    try:
+        # 1. Retrieve product details
+        products = odoo_call(
+            "product.template",
+            "read",
+            {
+                "ids": [product_id],
+                "fields": [
+                    "id",
+                    "name",
+                    "default_code",
+                    "list_price"
+                ]
+            }
+        )
+
+        if not products:
+            return {
+                "status": "NOT_FOUND",
+                "product_id": product_id
+            }
+
+        product = products[0]
+
+        # 2. Retrieve attributes assigned to this product
+        attribute_lines = odoo_call(
+            "product.template.attribute.line",
+            "search_read",
+            {
+                "domain": [
+                    ["product_tmpl_id", "=", product_id]
+                ],
+                "fields": [
+                    "attribute_id",
+                    "value_ids"
+                ],
+                "limit": 200
+            }
+        )
+
+        # 3. Collect all attribute value IDs
+        value_ids = list({
+            value_id
+            for line in attribute_lines
+            for value_id in line.get("value_ids", [])
+        })
+
+        # 4. Retrieve attribute value names
+        values = []
+
+        if value_ids:
+            values = odoo_call(
+                "product.attribute.value",
+                "read",
+                {
+                    "ids": value_ids,
+                    "fields": [
+                        "id",
+                        "name",
+                        "attribute_id"
+                    ]
+                }
+            )
+
+        value_map = {
+            value["id"]: value
+            for value in values
+        }
+
+        # 5. Build dynamic attribute JSON
+        attributes = []
+
+        for line in attribute_lines:
+            attribute = line.get("attribute_id")
+
+            if not attribute:
+                continue
+
+            selected_values = []
+
+            for value_id in line.get("value_ids", []):
+                value = value_map.get(value_id)
+
+                if value:
+                    selected_values.append(value["name"])
+
+            attributes.append({
+                "attribute_id": attribute[0],
+                "name": attribute[1],
+                "values": selected_values
+            })
+
+        return {
+            "status": "SUCCESS",
+            "product": {
+                "id": product["id"],
+                "name": product["name"],
+                "default_code": product.get("default_code"),
+                "list_price": product["list_price"],
+                "attributes": attributes
+            }
+        }
+
+    except requests.RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail=str(error)
+        )
