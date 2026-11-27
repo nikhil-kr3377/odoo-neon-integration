@@ -3,6 +3,7 @@ import os
 import re
 import hmac
 import logging
+import requests
 
 import psycopg
 from fastapi import FastAPI, Request, HTTPException
@@ -22,6 +23,112 @@ def get_db_connection():
         password=os.environ["PGPASSWORD"],
         sslmode="require"
     )
+
+def fetch_odoo_attributes(product_id):
+    odoo_url = os.getenv("ODOO_URL", "").rstrip("/")
+    api_key = os.getenv("ODOO_API_KEY")
+
+    if not odoo_url or not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="Odoo environment variables are missing"
+        )
+
+    headers = {
+        "Authorization": f"bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    def odoo_call(model, method, payload):
+        url = f"{odoo_url}/json/2/{model}/{method}"
+
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+
+        if not response.ok:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Odoo API error: {response.text[:1000]}"
+            )
+
+        return response.json()
+
+    try:
+        # Retrieve product attribute lines
+        attribute_lines = odoo_call(
+            "product.template.attribute.line",
+            "search_read",
+            {
+                "domain": [
+                    ["product_tmpl_id", "=", product_id]
+                ],
+                "fields": [
+                    "attribute_id",
+                    "value_ids"
+                ],
+                "limit": 200
+            }
+        )
+
+        # Collect attribute value IDs
+        value_ids = list({
+            value_id
+            for line in attribute_lines
+            for value_id in line.get("value_ids", [])
+        })
+
+        # Retrieve attribute value names
+        values = []
+
+        if value_ids:
+            values = odoo_call(
+                "product.attribute.value",
+                "read",
+                {
+                    "ids": value_ids,
+                    "fields": [
+                        "id",
+                        "name",
+                        "attribute_id"
+                    ]
+                }
+            )
+
+        value_map = {
+            value["id"]: value
+            for value in values
+        }
+
+        attributes = []
+
+        for line in attribute_lines:
+            attribute = line.get("attribute_id")
+
+            if not attribute:
+                continue
+
+            for value_id in line.get("value_ids", []):
+                value = value_map.get(value_id)
+
+                if value:
+                    attributes.append({
+                        "attribute_id": attribute[0],
+                        "attribute_name": attribute[1],
+                        "attribute_value": value["name"]
+                    })
+
+        return attributes
+
+    except requests.RequestException:
+        logging.exception("Failed to retrieve Odoo attributes")
+        raise HTTPException(
+            status_code=502,
+            detail="Could not retrieve product attributes from Odoo"
+        )
 
 
 @app.get("/")
@@ -168,9 +275,6 @@ async def receive_product(request: Request, secret: str):
         )
 
 
-import os
-import requests
-from fastapi import HTTPException
 
 @app.get("/test-odoo")
 def test_odoo():
