@@ -191,18 +191,17 @@ def test_odoo():
         "User-Agent": "odoo-neon-integration"
     }
 
- payload = {
-    "domain": [],
-    "limit": 5,
-    "fields": [
-        "id",
-        "name",
-        "default_code",
-        "list_price",
-        "active"
-    ]
-}
-
+    payload = {
+        "domain": [],
+        "limit": 5,
+        "fields": [
+            "id",
+            "name",
+            "default_code",
+            "list_price",
+            "active"
+        ]
+    }
     try:
         response = requests.post(
             url,
