@@ -156,6 +156,8 @@ def db_check():
         )
 
 @app.post("/webhook/{secret}")
+status = "ACTIVE" if active else "INACTIVE"
+attributes = fetch_odoo_attributes(odoo_id)
 async def receive_product(request: Request, secret: str):
 
     if not hmac.compare_digest(secret, WEBHOOK_SECRET):
