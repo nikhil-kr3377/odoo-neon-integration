@@ -166,3 +166,66 @@ async def receive_product(request: Request, secret: str):
             status_code=500,
             detail="Product synchronization failed. Check server logs."
         )
+
+
+import os
+import requests
+from fastapi import HTTPException
+
+@app.get("/test-odoo")
+def test_odoo():
+    odoo_url = os.getenv("ODOO_URL", "").rstrip("/")
+    api_key = os.getenv("ODOO_API_KEY")
+
+    if not odoo_url or not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="Odoo environment variables are missing"
+        )
+
+    url = f"{odoo_url}/json/2/product.template/read"
+
+    headers = {
+        "Authorization": f"bearer {api_key}",
+        "Content-Type": "application/json",
+        "User-Agent": "odoo-neon-integration"
+    }
+
+    payload = {
+        "ids": [28],
+        "fields": [
+            "id",
+            "name",
+            "default_code",
+            "list_price",
+            "description_sale",
+            "active",
+            "write_date"
+        ]
+    }
+
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+
+        if not response.ok:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail="Odoo API error: " + response.text[:1000]
+            )
+
+        return {
+            "status": "SUCCESS",
+            "message": "Connected to Odoo successfully",
+            "product_data": response.json()
+        }
+
+    except requests.RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail=str(error)
+        )
